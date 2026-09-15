@@ -133,7 +133,7 @@ export function App() {
 
   const triggers = useTriggers(client, 5_000, visibleAdmin.triggers);
 
-  const { theme, persona, features } = useSettings(client);
+  const { theme, persona, features, agent: agentSettings } = useSettings(client);
 
   const [threadTitles, setThreadTitles] = useState<Map<string, string>>(() => new Map());
   const [threadModels, setThreadModels] = useState<Map<string, string>>(() => new Map());
@@ -482,6 +482,9 @@ export function App() {
                 enableMemories={features.enableMemories}
                 enableAutomations={features.enableAutomations}
                 onFeatureToggle={features.setFlag}
+                maxToolCalls={agentSettings.maxToolCalls}
+                maxSubagentToolCalls={agentSettings.maxSubagentToolCalls}
+                onToolCallLimitChange={agentSettings.setToolCallLimit}
                 notificationsAvailable={desktopNotifications !== undefined}
                 notifyOnRunCompletion={
                   desktopNotifications?.notifyOnRunCompletion ?? true

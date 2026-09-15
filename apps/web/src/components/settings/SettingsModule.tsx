@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   KeyRound,
   FolderOpen,
@@ -17,8 +17,10 @@ import { L } from "../../lexicon.js";
 import { providerLabel } from "../../model-options.js";
 import type { ThemePreference } from "../../theme-storage.js";
 import type { DesktopConnection } from "../../use-desktop-connection.js";
+import type { ToolCallLimitKey } from "../../use-settings.js";
 import { ConnectionSettings } from "./ConnectionSettings.js";
 import { LocalFoldersSettings } from "./LocalFoldersSettings.js";
+import { resolveToolCallLimitEdit, toolCallLimitDraft } from "./tool-call-limit.js";
 import type { ApiClient } from "@/api-client";
 
 export interface SettingsModuleProps {
@@ -45,6 +47,9 @@ export interface SettingsModuleProps {
   enableMemories: boolean;
   enableAutomations: boolean;
   onFeatureToggle: (key: "enableMemories" | "enableAutomations", value: boolean) => void;
+  maxToolCalls: number;
+  maxSubagentToolCalls: number;
+  onToolCallLimitChange: (key: ToolCallLimitKey, value: number) => void;
   notificationsAvailable: boolean;
   notifyOnRunCompletion: boolean;
   notifyOnActionRequired: boolean;
@@ -76,6 +81,68 @@ const SETTINGS_CATEGORIES: {
   { id: "files", label: L.settingsFilesCategory, icon: FolderOpen },
 ];
 
+interface ToolCallLimitSettingProps {
+  label: string;
+  hint: string;
+  value: number;
+  onChange: (value: number) => void;
+}
+
+function ToolCallLimitSetting({ label, hint, value, onChange }: ToolCallLimitSettingProps) {
+  const [draft, setDraft] = useState(() => toolCallLimitDraft(value));
+  const [invalid, setInvalid] = useState(false);
+  const errorId = `${useId()}-error`;
+
+  useEffect(() => {
+    setDraft(toolCallLimitDraft(value));
+    setInvalid(false);
+  }, [value]);
+
+  // A text input keeps the raw draft: `type="number"` reports "" for text it cannot
+  // parse ("1e", "-"), which is indistinguishable from the empty "no limit" field.
+  const save = () => {
+    const edit = resolveToolCallLimitEdit(draft, value);
+    setInvalid(edit.kind === "invalid");
+    if (edit.kind === "invalid") return;
+    setDraft(toolCallLimitDraft(edit.kind === "save" ? edit.value : value));
+    if (edit.kind === "save") onChange(edit.value);
+  };
+
+  return (
+    <div className="settings-row settings-row-adaptive">
+      <div className="settings-row-text">
+        <div className="settings-row-label">{label}</div>
+        <div className="settings-row-hint">{hint}</div>
+        {invalid && (
+          <div className="settings-row-hint error" id={errorId}>
+            {L.toolCallLimitInvalid}
+          </div>
+        )}
+      </div>
+      <div className="settings-limit-control">
+        <input
+          className={`settings-number-input${invalid ? " invalid" : ""}`}
+          type="text"
+          inputMode="numeric"
+          value={draft}
+          placeholder={L.noToolCallLimitLabel}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setInvalid(false);
+          }}
+          onBlur={save}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+          aria-label={label}
+          aria-invalid={invalid}
+          aria-describedby={invalid ? errorId : undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function SettingsModule({
   client,
   theme,
@@ -96,6 +163,9 @@ export function SettingsModule({
   enableMemories,
   enableAutomations,
   onFeatureToggle,
+  maxToolCalls,
+  maxSubagentToolCalls,
+  onToolCallLimitChange,
   notificationsAvailable,
   notifyOnRunCompletion,
   notifyOnActionRequired,
@@ -259,6 +329,22 @@ export function SettingsModule({
                     />
                   </div>
                 ))}
+              </section>
+
+              <section className="settings-group settings-stack">
+                <h2 className="settings-group-title">{L.agentTitle}</h2>
+                <ToolCallLimitSetting
+                  label={L.maxToolCallsLabel}
+                  hint={L.maxToolCallsHint}
+                  value={maxToolCalls}
+                  onChange={(value) => onToolCallLimitChange("maxToolCalls", value)}
+                />
+                <ToolCallLimitSetting
+                  label={L.maxSubagentToolCallsLabel}
+                  hint={L.maxSubagentToolCallsHint}
+                  value={maxSubagentToolCalls}
+                  onChange={(value) => onToolCallLimitChange("maxSubagentToolCalls", value)}
+                />
               </section>
 
               {notificationsAvailable && (

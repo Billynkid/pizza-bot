@@ -36,7 +36,14 @@ export interface UseSettingsResult {
     enableAutomations: boolean;
     setFlag: (key: "enableMemories" | "enableAutomations", value: boolean) => void;
   };
+  agent: {
+    maxToolCalls: number;
+    maxSubagentToolCalls: number;
+    setToolCallLimit: (key: ToolCallLimitKey, value: number) => void;
+  };
 }
+
+export type ToolCallLimitKey = "maxToolCalls" | "maxSubagentToolCalls";
 
 const isBrowser = typeof window !== "undefined";
 
@@ -150,6 +157,21 @@ export function useSettings(client: ApiClient): UseSettingsResult {
     setPersonaStatus("idle");
   }, []);
 
+  const setToolCallLimit = useCallback(
+    (key: ToolCallLimitKey, value: number) => {
+      const previous = settings[key];
+      setSettings((s) => ({ ...s, [key]: value }));
+      void client
+        .updateSettings({ [key]: value })
+        .then((saved) => setSettings(saved))
+        .catch((err) => {
+          setSettings((s) => ({ ...s, [key]: previous }));
+          toast({ title: "Couldn't save tool call limit", description: errorMessage(err), tone: "error" });
+        });
+    },
+    [client, settings, toast],
+  );
+
   const savedPersonaRef = useRef(settings.customPromptAddendum);
   savedPersonaRef.current = settings.customPromptAddendum;
   const savePersona = useCallback(() => {
@@ -178,11 +200,18 @@ export function useSettings(client: ApiClient): UseSettingsResult {
         enableAutomations: settings.enableAutomations,
         setFlag,
       },
+      agent: {
+        maxToolCalls: settings.maxToolCalls,
+        maxSubagentToolCalls: settings.maxSubagentToolCalls,
+        setToolCallLimit,
+      },
     }),
     [
       settings.theme,
       settings.enableMemories,
       settings.enableAutomations,
+      settings.maxToolCalls,
+      settings.maxSubagentToolCalls,
       resolved,
       setPreference,
       personaDraft,
@@ -190,6 +219,7 @@ export function useSettings(client: ApiClient): UseSettingsResult {
       setPersonaValue,
       savePersona,
       setFlag,
+      setToolCallLimit,
     ],
   );
 }

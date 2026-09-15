@@ -46,4 +46,30 @@ describe("GraphManager memory settings", () => {
     expect(enabledPrompt).toContain(PIZZA_BOT_MEMORY_PROMPT);
     expect((enabledDeps as RuntimeDeps).memoryEnabled?.()).toBe(true);
   });
+
+  it("rebuilds with the current orchestrator and subagent tool-call limits", async () => {
+    const models = new ModelRegistry();
+    await registerBuiltinProviders(models);
+    let maxToolCalls = 40;
+    let maxSubagentToolCalls = 80;
+    const registry = new GraphManager({
+      modelId: MODEL_ID,
+      models,
+      dependencies: {},
+      getMaxToolCalls: () => maxToolCalls,
+      getMaxSubagentToolCalls: () => maxSubagentToolCalls,
+    });
+
+    await registry.initialize(await models.buildModel(MODEL_ID));
+    expect((vi.mocked(createPizzaBotAgent).mock.calls[0]![1] as RuntimeDeps).maxToolCalls).toBe(40);
+    expect((vi.mocked(createPizzaBotAgent).mock.calls[0]![1] as RuntimeDeps).maxSubagentToolCalls)
+      .toBe(80);
+
+    maxToolCalls = -1;
+    maxSubagentToolCalls = -1;
+    await registry.ensureSettings();
+    expect((vi.mocked(createPizzaBotAgent).mock.calls.at(-1)![1] as RuntimeDeps).maxToolCalls).toBe(-1);
+    expect((vi.mocked(createPizzaBotAgent).mock.calls.at(-1)![1] as RuntimeDeps).maxSubagentToolCalls)
+      .toBe(-1);
+  });
 });

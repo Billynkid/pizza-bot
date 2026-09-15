@@ -87,17 +87,78 @@ describe("Pizza Bot graph assembly", () => {
       ]),
     );
     expect(mocks.modelCallLimitMiddleware).toHaveBeenCalledWith({
-      runLimit: 20,
+      runLimit: 40,
       exitBehavior: "end",
     });
     expect(mocks.toolCallLimitMiddleware).toHaveBeenCalledWith({
-      runLimit: 40,
-      exitBehavior: "error",
+      runLimit: 100,
+      exitBehavior: "continue",
     });
     expect(params.subagents).toBeUndefined();
     expect(mocks.createCodeInterpreterMiddleware).toHaveBeenCalledWith(
       expect.objectContaining({ subagents: false }),
     );
+  });
+
+  it("uses the configured tool-call limit", async () => {
+    await createPizzaBotAgent("prompt", {
+      model: { modelId: "test" } as never,
+      maxToolCalls: 73,
+    });
+    expect(mocks.toolCallLimitMiddleware).toHaveBeenCalledWith({
+      runLimit: 73,
+      exitBehavior: "continue",
+    });
+
+    mocks.toolCallLimitMiddleware.mockClear();
+    await createPizzaBotAgent("prompt", {
+      model: { modelId: "test" } as never,
+      maxToolCalls: -1,
+    });
+    const params = mocks.createDeepAgent.mock.calls.at(-1)![0] as {
+      middleware: Array<{ name?: string }>;
+    };
+    expect(mocks.toolCallLimitMiddleware).not.toHaveBeenCalled();
+    expect(params.middleware.map((middleware) => middleware.name))
+      .not.toContain("ToolCallLimitMiddleware");
+  });
+
+  it("uses the configured subagent limit and omits both limiters when unlimited", async () => {
+    await createPizzaBotAgent("prompt", {
+      model: { modelId: "test" } as never,
+      checkpointer: {},
+      skills: mailSkill(),
+      tools: { "mcp:outlook:send": { name: "outlook__send" } },
+      catalog: { outlook: ["send"] },
+      maxSubagentToolCalls: 73,
+    });
+    expect(mocks.toolCallLimitMiddleware.mock.calls).toEqual([
+      [{ runLimit: 100, exitBehavior: "continue" }],
+      [{ runLimit: 73, exitBehavior: "continue" }],
+    ]);
+
+    mocks.toolCallLimitMiddleware.mockClear();
+    await createPizzaBotAgent("prompt", {
+      model: { modelId: "test" } as never,
+      checkpointer: {},
+      skills: mailSkill(),
+      tools: { "mcp:outlook:send": { name: "outlook__send" } },
+      catalog: { outlook: ["send"] },
+      maxToolCalls: -1,
+      maxSubagentToolCalls: -1,
+    });
+
+    const rootParams = mocks.createDeepAgent.mock.calls.at(-1)![0] as {
+      middleware: Array<{ name?: string }>;
+    };
+    const workerParams = mocks.createSubAgent.mock.calls.at(-1)![0] as {
+      middleware: Array<{ name?: string }>;
+    };
+    expect(mocks.toolCallLimitMiddleware).not.toHaveBeenCalled();
+    expect(rootParams.middleware.map((middleware) => middleware.name))
+      .not.toContain("ToolCallLimitMiddleware");
+    expect(workerParams.middleware.map((middleware) => middleware.name))
+      .not.toContain("ToolCallLimitMiddleware");
   });
 
   it("compiles each skill behind its declared tools and HITL policy", async () => {
@@ -126,12 +187,12 @@ describe("Pizza Bot graph assembly", () => {
     expect(subagentParams.middleware.map((middleware) => middleware.name))
       .not.toContain("SkillsMiddleware");
     expect(mocks.modelCallLimitMiddleware.mock.calls).toEqual([
-      [{ runLimit: 20, exitBehavior: "end" }],
-      [{ runLimit: 20, exitBehavior: "end" }],
+      [{ runLimit: 40, exitBehavior: "end" }],
+      [{ runLimit: 40, exitBehavior: "end" }],
     ]);
     expect(mocks.toolCallLimitMiddleware.mock.calls).toEqual([
-      [{ runLimit: 40, exitBehavior: "error" }],
-      [{ runLimit: 80, exitBehavior: "error" }],
+      [{ runLimit: 100, exitBehavior: "continue" }],
+      [{ runLimit: 150, exitBehavior: "continue" }],
     ]);
     const params = mocks.createDeepAgent.mock.calls[0]![0] as {
       subagents: Array<{ runnable: unknown }>;
@@ -144,7 +205,7 @@ describe("Pizza Bot graph assembly", () => {
     );
   });
 
-  it("adds live local-folder context to Pizza Bot and skill workers", async () => {
+  it("adds live local-folder context to the orchestrator and subagents", async () => {
     await createPizzaBotAgent("prompt", {
       model: { modelId: "test" } as never,
       skills: mailSkill(),

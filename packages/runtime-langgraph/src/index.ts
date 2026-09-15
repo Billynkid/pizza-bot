@@ -26,6 +26,7 @@ import {
   type Logger,
   type ToolCatalog,
   BUILTIN_EVAL_TOOL_REF,
+  DEFAULT_SETTINGS,
 } from "@pizza-bot/core";
 import type { ThreadStateValues } from "@pizza-bot/core";
 import type { ProtocolEvent, StateSnapshot } from "@langchain/langgraph";
@@ -49,12 +50,12 @@ registerHarnessProfile("openai", { excludedMiddleware: ["todoListMiddleware"] })
 
 export const AGENT_RUN_LIMITS = {
   orchestrator: {
-    modelCalls: 20,
-    toolCalls: 40,
+    modelCalls: 40,
+    toolCalls: DEFAULT_SETTINGS.maxToolCalls,
   },
   subagent: {
-    modelCalls: 20,
-    toolCalls: 80,
+    modelCalls: 40,
+    toolCalls: DEFAULT_SETTINGS.maxSubagentToolCalls,
   },
 } as const;
 
@@ -65,7 +66,7 @@ interface RunLimits {
 
 interface RunLimitMiddlewareOptions {
   runLimit: number;
-  exitBehavior: "end" | "error";
+  exitBehavior: "continue" | "end";
 }
 
 function runLimitMiddleware(limits: RunLimits): unknown[] {
@@ -76,16 +77,22 @@ function runLimitMiddleware(limits: RunLimits): unknown[] {
   const createToolCallLimit = toolCallLimitMiddleware as unknown as (
     options: RunLimitMiddlewareOptions,
   ) => unknown;
-  return [
+  const middleware: unknown[] = [
     createModelCallLimit({
       runLimit: limits.modelCalls,
       exitBehavior: "end",
     }),
-    createToolCallLimit({
-      runLimit: limits.toolCalls,
-      exitBehavior: "error",
-    }),
   ];
+  if (limits.toolCalls !== -1) {
+    // The limiter clears its per-run counter only once the graph completes, so blocking
+    // the excess in place is what keeps each turn's budget its own; a model that keeps
+    // requesting blocked tools stays bounded by the model-call ceiling.
+    middleware.push(createToolCallLimit({
+      runLimit: limits.toolCalls,
+      exitBehavior: "continue",
+    }));
+  }
+  return middleware;
 }
 
 // DeepAgents returns arbitrary child state to the parent; limiter counters are invocation-local.
@@ -209,7 +216,7 @@ function resolveToolRefs(
 }
 
 /**
- * Derive one isolated worker from each skill. The skill catalog is the only
+ * Derive one isolated subagent from each skill. The skill catalog is the only
  * source of subagent identity, instructions, tools, and HITL policy.
  */
 export async function resolveSkillSubagents(
@@ -218,11 +225,15 @@ export async function resolveSkillSubagents(
 ): Promise<readonly SubAgent[] | undefined> {
   if (!skills?.size) return undefined;
   const logger = deps.logger;
+  const limits = {
+    ...AGENT_RUN_LIMITS.subagent,
+    toolCalls: deps.maxSubagentToolCalls ?? AGENT_RUN_LIMITS.subagent.toolCalls,
+  };
   const entries = [...skills.values()];
   const resolved = await Promise.all(entries.map(async (entry) => {
     try {
       const middleware: unknown[] = [
-        ...runLimitMiddleware(AGENT_RUN_LIMITS.subagent),
+        ...runLimitMiddleware(limits),
         subagentFinalizationMiddleware(AGENT_RUN_LIMITS.subagent.modelCalls),
         toolErrorRecoveryMiddleware(),
         outputTruncationMiddleware(),
@@ -255,7 +266,7 @@ export async function resolveSkillSubagents(
       } as unknown as SubAgent;
     } catch (err) {
       logger?.warn(
-        `[skills] worker "${entry.id}" disabled: ${err instanceof Error ? err.message : String(err)}`,
+        `[skills] subagent "${entry.id}" disabled: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
@@ -317,7 +328,10 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
   });
 
   const middleware: unknown[] = [
-    ...runLimitMiddleware(AGENT_RUN_LIMITS.orchestrator),
+    ...runLimitMiddleware({
+      ...AGENT_RUN_LIMITS.orchestrator,
+      toolCalls: deps.maxToolCalls ?? AGENT_RUN_LIMITS.orchestrator.toolCalls,
+    }),
     toolErrorRecoveryMiddleware(),
     currentDateTimeMiddleware(),
   ];
@@ -333,13 +347,13 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
   const resolvedSubagents = await resolveSkillSubagents(deps.skills, deps);
   const subagents = resolvedSubagents?.map((subagent): SubAgent | CompiledSubAgent => {
     if (!model) {
-      throw new Error("Pizza Bot requires a resolved model before compiling skill workers.");
+      throw new Error("Pizza Bot requires a resolved model before compiling subagents.");
     }
     return {
       name: subagent.name,
       description: subagent.description,
       runnable: isolateSubagentLocalState(
-        // Compiled workers bypass createDeepAgent's declarative filesystem/skills normalization.
+        // Compiled subagents bypass createDeepAgent's declarative filesystem/skills normalization.
         createSubAgent({
           ...subagent,
           model,
@@ -357,7 +371,7 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
     ...(model ? { model } : {}),
     subagents: subagents ?? [],
   }));
-  // The sandbox's task() global only has somewhere to dispatch when workers exist.
+  // The sandbox's task() global only has somewhere to dispatch when subagents exist.
   middleware.push(await codeInterpreterMiddleware(Boolean(subagents?.length)));
 
   const params: Record<string, unknown> = {
@@ -370,7 +384,7 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
   if (deps.checkpointer) params.checkpointer = deps.checkpointer;
   if (deps.store) params.store = deps.store;
 
-  // Workers receive their SKILL.md body as their system prompt; the seed retains
+  // Subagents receive their SKILL.md body as their system prompt; the seed retains
   // sibling files without coaching the root to read skill instructions.
   const skillSeed = buildSkillSeed(deps);
   const hasSeed = Object.keys(skillSeed).length > 0;
@@ -538,7 +552,7 @@ class LangGraphAgent implements AgentHandle {
   }
 }
 
-/** Compile the static Pizza Bot graph and its skill-derived workers. */
+/** Compile the static Pizza Bot graph and its skill-derived subagents. */
 export async function createPizzaBotAgent(
   systemPrompt: string,
   deps: RuntimeDeps,
