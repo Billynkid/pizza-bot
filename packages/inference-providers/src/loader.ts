@@ -7,6 +7,7 @@ import { GoogleLangChainModelProvider } from "./providers/google.js";
 import { OpenAiLangChainModelProvider } from "./providers/openai.js";
 import { OpenRouterLangChainModelProvider } from "./providers/openrouter.js";
 import { OllamaLangChainModelProvider } from "./providers/ollama.js";
+import { LlamaCppLangChainModelProvider } from "./providers/llamacpp.js";
 
 /** Resolve saved secret references before a provider can build its first model. */
 export async function registerBuiltinProviders(registry: ModelRegistry, configs?: ProviderConfigPort): Promise<void> {
@@ -24,6 +25,7 @@ export async function registerBuiltinProviders(registry: ModelRegistry, configs?
     new OpenAiLangChainModelProvider(),
     new OpenRouterLangChainModelProvider(),
     new OllamaLangChainModelProvider(),
+    new LlamaCppLangChainModelProvider(),
   ];
   for (const provider of providers) {
     const saved = configs?.getConfig(provider.id);
